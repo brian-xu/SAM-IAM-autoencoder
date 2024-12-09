@@ -30,7 +30,7 @@ def load_data():
     train_diff_maps = []
     skewed_frame0 = []
     test_images = []
-    folder_dir = "bear"
+    folder_dir = "DAVIS/Annotations/480p/bear"
     for i, image in enumerate(listdir(folder_dir)[:len(folder_dir)-1]):
         img0 = np.asarray(Image.open(f"{folder_dir}/{image}"))
         img1_path = listdir(folder_dir)[i+1]
