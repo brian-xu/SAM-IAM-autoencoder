@@ -18,8 +18,8 @@ def skew(image):
         v2.ToDtype(torch.float32)])
     
     skewed_image = datagen(image)
-    normalize = v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    return normalize(skewed_image)
+    # normalize = v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    return skewed_image
 
 def get_difference_map(image1, image2):
     """ takes in two images as arrays, returns a difference map as an array """
@@ -42,8 +42,9 @@ def load_data():
         skewed_frame0.append(skewed_img0)
 
     for image in listdir(folder_dir)[1:]: 
-        if image == "00077.png":
-            continue
+
+        ## TODO: take out alpha channel otherwise skip 77
+
         img = np.asarray(Image.open(f"{folder_dir}/{image}"))
         skewed_img = skew(torch.unsqueeze(torch.Tensor(img), 0))
         test_images.append(np.asarray(skewed_img))
@@ -77,7 +78,7 @@ class Encoder(nn.Module):
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
         self.conv4 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1)
         self.flatten_size = 256 * (self.height // 16) * (self.width // 16)
-        self.fc1 = nn.Linear(self.flatten_size, 1024)
+        self.fc1 = nn.Linear(1620, 1024)
         self.fc2 = nn.Linear(1024, self.latent_dim)
 
     def forward(self, diff_mask):
@@ -86,8 +87,7 @@ class Encoder(nn.Module):
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
         x = F.relu(self.conv4(x))
-        x = x.view(x.size(0), -1)
-        print(x.shape)
+        x = x.view(x.size(0), -1) # flatten
         x = self.fc1(x)
         x = F.relu(x)
         latent_space = self.fc2(x)
@@ -103,14 +103,14 @@ class Decoder(nn.Module):
         self.input_channels = input_channels
         self.new_frame_size = input_channels * self.height * self.width
         
-        self.fc1 = nn.Linear(self.latent_dim + self.new_frame_size, 2048)
+        self.fc1 = nn.Linear(263168, 2048) # don't hardcode
         self.fc2 = nn.Linear(2048, 128 * (self.height // 16) * (self.width // 16))
         self.conv1 = nn.ConvTranspose2d(128, 64, kernel_size=3, stride=2, padding=1)
         self.conv2 = nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1)
         self.conv3 = nn.ConvTranspose2d(32, 1, kernel_size=3, stride=2, padding=1)
 
     def forward(self, latent_code, frame1):
-        x = torch.cat((latent_code, frame1.view(frame1.size(0), -1)), dim=1)
+        x = torch.hstack((latent_code.view(1, -1), frame1.view(frame1.size(0), -1)))
         x = self.fc1(x)
         x = F.relu(x)
         x = F.relu(self.fc2(x))
@@ -130,8 +130,13 @@ class AE(torch.nn.Module):
 
     def forward(self, diff_map, frame1):
         x = self.encoder(diff_map)
+        print("encoder output shape: ", x.shape)
         x = self.decoder(x, frame1)
-        return torch.nn.Conv2D(3, (3, 3), activation='sigmoid', padding='same')(x)
+        print(x.shape)
+        conv = torch.nn.Conv2d(1, 1, (3, 3), padding='same')(x)
+        print(conv.shape)
+
+        return conv
 
 def main():
 
@@ -139,8 +144,11 @@ def main():
     train_set = AEDataset(train_diff_maps, skewed_frame1, test_images)
     train_data = DataLoader(train_set)
 
-    dims = train_diff_maps[0].shape[-2:]
+    dims = (480, 480)
+    print("train image dim: ", train_diff_maps[0].shape[-2:])
+    print("test image dim: ", test_images[0].shape[-2:])
     latent_dim = 128
+
     if len(train_diff_maps[0].shape) == 2:
         input_channels = 1
     else:
