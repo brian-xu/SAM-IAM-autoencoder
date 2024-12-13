@@ -11,9 +11,11 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 image_size = 256
+latent_dim = 128
+input_channels = 1
 
 def random_skew():
-    datagen = transforms.Compose([transforms.Resize((256,256)),
+    datagen = transforms.Compose([transforms.Resize((image_size,image_size)),
                                   transforms.RandomAffine(degrees=0, scale=(0.85, 1.25), shear=(-45,45,-45,45)), 
                                   transforms.Lambda(lambda x: x.point(lambda y: 255 if y > 250 else 0))])
     
@@ -63,7 +65,8 @@ class AEDataset(torch.utils.data.Dataset):
 class Encoder(nn.Module):
     def __init__(self, latent_dim, input_channels, img_size):
         super(Encoder, self).__init__()
-
+        
+        self.resize = transforms.Resize((image_size, image_size))
         self.latent_dim = latent_dim
         self.height = self.width = img_size
         self.input_channels = input_channels
@@ -72,11 +75,12 @@ class Encoder(nn.Module):
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
         self.conv4 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1)
-        self.flatten_size = 256 * (self.height // 16) * (self.width // 16)
-        self.fc1 = nn.Linear(1620, 1024)
+        self.flatten_size = (self.height // 16) * (self.width // 16)
+        self.fc1 = nn.Linear(self.flatten_size, 1024)
         self.fc2 = nn.Linear(1024, self.latent_dim)
 
     def forward(self, diff_mask):
+        diff_mask = self.resize(diff_mask)
         x = F.relu(self.conv1(diff_mask))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
@@ -91,6 +95,7 @@ class Decoder(nn.Module):
     def __init__(self, latent_dim, input_channels, img_size):
         super(Decoder, self).__init__()
 
+        self.resize = transforms.Resize((image_size, image_size))
         self.latent_dim = latent_dim
         self.height = self.width = img_size
         self.input_channels = input_channels
@@ -98,7 +103,7 @@ class Decoder(nn.Module):
         
         self.input_dim = self.latent_dim*256 + self.height*self.width
 
-        self.fc1 = nn.Linear(self.input_dim, 2048) # don't hardcode
+        self.fc1 = nn.Linear(self.input_dim, 2048)
         self.fc2 = nn.Linear(2048, 128 * (self.height // 16) * (self.width // 16))
         self.conv1 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
         self.conv2 = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
@@ -106,6 +111,7 @@ class Decoder(nn.Module):
         self.conv4 = nn.ConvTranspose2d(16, 1, kernel_size=2, stride=2)
 
     def forward(self, latent_code, frame1):
+        frame1 = self.resize(frame1)
         x = torch.hstack((latent_code.view(1, -1), frame1.view(frame1.size(0), -1)))
         x = F.leaky_relu(self.fc1(x))
         x = F.leaky_relu(self.fc2(x))
@@ -130,14 +136,11 @@ class AE(torch.nn.Module):
 
         return torch.squeeze(x, dim=0)
 
-def main():
+def train():
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     train_set = AEDataset("/workspace/DAVIS")
     train_data = DataLoader(train_set, shuffle=True)
-
-    latent_dim = 128
-    input_channels = 1
 
     model = AE(latent_dim, input_channels, image_size).to(device)
 
@@ -171,6 +174,8 @@ def main():
                 
                 # so we can plot if needed?
                 losses.append(loss)
+                if i > 5:
+                    break
 
         # outputs.append((epochs, image, reconstructed))
     
@@ -182,4 +187,8 @@ def main():
     # # Plotting the last 100 values
     # plt.plot(losses[-100:])
 
-main()
+    # save model weights
+    torch.save(model.state_dict(), os.path.join(os.getcwd(), "model_weights/autoencoder.pth"))
+
+if __name__ == "__main__":
+    train()
