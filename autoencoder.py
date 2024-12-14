@@ -16,7 +16,7 @@ input_channels = 1
 
 def random_skew():
     datagen = transforms.Compose([transforms.Resize((image_size,image_size)),
-                                  transforms.RandomAffine(degrees=0, scale=(0.85, 1.25), shear=(-45,45,-45,45)), 
+                                  transforms.RandomAffine(degrees=0, scale=(0.85, 1.25), shear=(-15,15,-15,15)), 
                                   transforms.Lambda(lambda x: x.point(lambda y: 255 if y > 250 else 0))])
     
     return datagen
@@ -57,7 +57,9 @@ class AEDataset(torch.utils.data.Dataset):
         input_frame = Image.open(input_frame_path)
         output_frame = Image.open(output_frame_path)
         diff_map = get_difference_map(flatten(np.asarray(input_frame)), flatten(np.asarray(output_frame)))
-        skew = random_skew()
+        # skew = random_skew()
+        skew = transforms.Compose([transforms.Resize((image_size,image_size)),
+                                  transforms.Lambda(lambda x: x.point(lambda y: 255 if y > 250 else 0))])
         return {"diff_map": diff_map, 
                 "input_frame": flatten(np.asarray(skew(input_frame))), 
                 "output_frame": flatten(np.asarray(skew(output_frame)))}
@@ -75,9 +77,9 @@ class Encoder(nn.Module):
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
         self.conv3 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
         self.conv4 = nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1)
-        self.flatten_size = (self.height // 16) * (self.width // 16)
-        self.fc1 = nn.Linear(self.flatten_size, 1024)
-        self.fc2 = nn.Linear(1024, self.latent_dim)
+        self.flatten_size = 256 * (self.height // 16) * (self.width // 16)
+        self.fc1 = nn.Linear(self.flatten_size, 512)
+        self.fc2 = nn.Linear(512, self.latent_dim)
 
     def forward(self, diff_mask):
         diff_mask = self.resize(diff_mask)
@@ -85,7 +87,7 @@ class Encoder(nn.Module):
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
         x = F.relu(self.conv4(x))
-        x = x.view(x.size(0), -1) # flatten
+        x = x.view(-1) # flatten
         x = F.relu(self.fc1(x))
         latent_space = self.fc2(x)
 
@@ -101,10 +103,10 @@ class Decoder(nn.Module):
         self.input_channels = input_channels
         self.new_frame_size = input_channels * self.height * self.width
         
-        self.input_dim = self.latent_dim*256 + self.height*self.width
+        self.input_dim = self.latent_dim + self.height*self.width
 
-        self.fc1 = nn.Linear(self.input_dim, 2048)
-        self.fc2 = nn.Linear(2048, 128 * (self.height // 16) * (self.width // 16))
+        self.fc1 = nn.Linear(self.input_dim, 512)
+        self.fc2 = nn.Linear(512, 128 * (self.height // 16) * (self.width // 16))
         self.conv1 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
         self.conv2 = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
         self.conv3 = nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2)
@@ -136,18 +138,20 @@ class AE(torch.nn.Module):
 
         return torch.squeeze(x, dim=0)
 
-def train():
+def train(checkpoint_path=""):
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     train_set = AEDataset("/workspace/DAVIS")
     train_data = DataLoader(train_set, shuffle=True)
 
     model = AE(latent_dim, input_channels, image_size).to(device)
+    if checkpoint_path:
+        model.load_state_dict(torch.load(checkpoint_path))
 
     loss_function = torch.nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr = 1e-1, weight_decay = 1e-8)
+    optimizer = torch.optim.Adam(model.parameters(), lr = 3e-4, weight_decay = 1e-8)
     
-    epochs = 5
+    epochs = 20
     outputs = []
     losses = []
 
@@ -174,8 +178,9 @@ def train():
                 
                 # so we can plot if needed?
                 losses.append(loss)
-                if i > 5:
-                    break
+                # if i > 5:
+                #     break
+            # print(loss)
 
         # outputs.append((epochs, image, reconstructed))
     
